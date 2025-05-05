@@ -17,28 +17,34 @@ def harris3d(point_cloud:o3d.geometry.PointCloud, radius=1, max_nn=1000, thresho
     pcd_tree = o3d.geometry.KDTreeFlann(point_cloud)
     # Compute Harris response
     harris_response = np.zeros(len(point_cloud.points))
-    is_corner = np.zeros(len(point_cloud.points), dtype=bool)
+    is_active = np.zeros(len(point_cloud.points), dtype=bool)
 
+    # Harris指標を計算
     for i in range(len(point_cloud.points)):
         [k, idx, _] = pcd_tree.search_knn_vector_3d(point_cloud.points[i], max_nn)
-        selected_points = point_cloud.select_by_index(idx)
-        selected_points.points = selected_points.normals
-        # Compute covariance matrix
-        _, cov_matrix = selected_points.compute_mean_and_covariance()
+        neighbor_points = point_cloud.select_by_index(idx)
+        neighbor_points_normals = neighbor_points.normals
+
+        # 訂正箇所
+        cov_matrix = np.cov(np.asarray(neighbor_points_normals).T)
+
+        # neighbor_points.points = neighbor_points_normals
+        # _, cov_matrix = neighbor_points.compute_mean_and_covariance()
+
         harris_response[i] = np.linalg.det(cov_matrix) / (np.trace(cov_matrix) ** 2 + 1e-10)
-        print(f"Point {i}: Harris response = {harris_response[i]}")
         if harris_response[i] > threshold:
-            is_corner[i] = True
+            is_active[i] = True
+
+        # print(f"Point {i}: Harris response = {harris_response[i]}")
 
     # Non-maximum suppression
     corners = []
     for i in range(len(point_cloud.points)):
-        if is_corner[i]:
-            corners.append(i)
-            # Suppress neighbors
+        if is_active[i]:
             [k, idx, _] = pcd_tree.search_radius_vector_3d(point_cloud.points[i], radius)
-            for j in idx:
-                is_corner[j] = False
+            idx.pop(harris_response[idx].argmax())  # Remove the point itself
+            is_active[idx] = False  # Suppress neighbors
+    corners = np.where(is_active)[0]
     return corners
 
 # Instrinsic Shape Signatures (ISS)
@@ -90,15 +96,15 @@ def non_maximum_suppression(points, scores, radius=0.1):
 
 def main(harris=False, iss=False):
     # Load a point cloud
-    pcd = o3d.io.read_point_cloud("./pcd/bun_zipper.ply")
+    pcd = o3d.io.read_point_cloud("./pcd/Vessel.ply")
     pcd.paint_uniform_color([0.5, 0.5, 0.5])
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.01, max_nn=30))
+    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=15, max_nn=30))
 
     def draw_corners(corners, color=[1, 0, 0]):
         # Draw spheres at the corners
         spheres = o3d.geometry.TriangleMesh()
         for corner in corners.points:
-            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.001)
+            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=3)
             sphere.translate(corner)
             sphere.paint_uniform_color(color)
             spheres += sphere
@@ -106,7 +112,7 @@ def main(harris=False, iss=False):
 
     # Harris3D corner detection
     if harris:
-        corners_harris = harris3d(pcd, radius=10, max_nn=10, threshold=0.005)
+        corners_harris = harris3d(pcd, radius=15, max_nn=30, threshold=0.001)
         print(f"Harris3D corners: {len(corners_harris)}")
         corners_harris = pcd.select_by_index(corners_harris)
         harris_corners_mesh = draw_corners(corners_harris, color=[1, 0, 0])
@@ -124,4 +130,4 @@ def main(harris=False, iss=False):
 
 
 if __name__ == "__main__":
-    main(iss=True)
+    main(harris=True)
